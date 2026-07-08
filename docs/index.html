@@ -294,6 +294,21 @@
               <label class="btn btn-secondary" for="importFile">Inventar importieren</label>
               <input class="sr-only" id="importFile" type="file" accept="application/json" />
             </div>
+            <div class="card" style="padding:1rem;margin-top:.75rem;background:var(--color-surface-2)">
+              <strong>GitHub-Sync</strong>
+              <p class="tiny">Speichern und Laden deiner JSON-Datei im GitHub-Repository.</p>
+              <div style="display:grid;gap:.5rem;margin-top:.5rem">
+                <input id="githubRepo" placeholder="owner/repo (z. B. me/physik)" />
+                <input id="githubBranch" placeholder="Branch (z. B. main)" />
+                <input id="githubPath" placeholder="Dateipfad (z. B. data/inventar.json)" />
+                <input id="githubToken" placeholder="Personal Access Token (PAT) – optional" type="password" />
+                <label style="font-size:var(--text-xs)"><input type="checkbox" id="githubRememberToken" /> Token speichern</label>
+                <div style="display:flex;gap:.5rem">
+                  <button class="btn btn-primary" id="githubSaveBtn">Speichern (GitHub)</button>
+                  <button class="btn btn-secondary" id="githubLoadBtn">Laden (GitHub)</button>
+                </div>
+              </div>
+            </div>
             <div class="card" style="padding:1rem;background:var(--color-surface-2)">
               <strong>Empfohlener Ablauf im Kollegium</strong>
               <ul style="margin-top:.75rem;padding-left:1rem;display:grid;gap:.45rem;">
@@ -721,6 +736,102 @@
       e.target.value = '';
     });
 
+    // --- GitHub integration helpers ---
+    function base64EncodeUnicode(str){
+      return btoa(unescape(encodeURIComponent(str)));
+    }
+
+    function getGithubConfig(){
+      return {
+        repo: $('githubRepo').value.trim(),
+        branch: $('githubBranch').value.trim() || 'main',
+        path: $('githubPath').value.trim(),
+        token: $('githubToken').value
+      };
+    }
+
+    function saveGithubConfig(rememberToken){
+      const cfg = { repo: $('githubRepo').value.trim(), branch: $('githubBranch').value.trim() || 'main', path: $('githubPath').value.trim() };
+      if(rememberToken) cfg.token = $('githubToken').value;
+      try{ localStorage.setItem('physiksammlung_github_config', JSON.stringify(cfg)); }catch(e){ console.warn('Config save failed', e); }
+    }
+
+    function loadGithubConfigToForm(){
+      try{
+        const raw = localStorage.getItem('physiksammlung_github_config');
+        if(!raw) return false;
+        const cfg = JSON.parse(raw);
+        if(cfg.repo) $('githubRepo').value = cfg.repo;
+        if(cfg.branch) $('githubBranch').value = cfg.branch;
+        if(cfg.path) $('githubPath').value = cfg.path;
+        if(cfg.token) { $('githubToken').value = cfg.token; $('#githubRememberToken'); }
+        return true;
+      }catch(e){ return false; }
+    }
+
+    async function githubGetFile(repo, path, branch, token){
+      const url = `https://api.github.com/repos/${repo}/contents/${encodeURI(path)}?ref=${encodeURIComponent(branch)}`;
+      const headers = { Accept: 'application/vnd.github.v3+json' };
+      if(token) headers.Authorization = 'token ' + token;
+      const res = await fetch(url, { headers });
+      if(!res.ok) throw new Error('GitHub GET failed: ' + res.status);
+      return res.json();
+    }
+
+    async function githubPutFile(repo, path, branch, token, contentBase64, message, sha){
+      const url = `https://api.github.com/repos/${repo}/contents/${encodeURI(path)}`;
+      const body = { message, content: contentBase64, branch };
+      if(sha) body.sha = sha;
+      const headers = { Accept: 'application/vnd.github.v3+json', 'Content-Type':'application/json' };
+      if(token) headers.Authorization = 'token ' + token;
+      const res = await fetch(url, { method: 'PUT', headers, body: JSON.stringify(body) });
+      if(!res.ok) throw new Error('GitHub PUT failed: ' + res.status);
+      return res.json();
+    }
+
+    async function githubLoad(){
+      const cfg = getGithubConfig();
+      if(!cfg.repo || !cfg.path) { showToast('Repo und Pfad angeben'); return; }
+      try{
+        const file = await githubGetFile(cfg.repo, cfg.path, cfg.branch, cfg.token);
+        const text = atob(file.content.replace(/\n/g,''));
+        const data = JSON.parse(text);
+        if(!Array.isArray(data.items) || !Array.isArray(data.loans)) throw new Error('Ungültiges Format');
+        state = data;
+        persist();
+        resetForm();
+        saveGithubConfig(false);
+        showToast('Von GitHub geladen');
+      }catch(err){
+        console.error(err);
+        showToast('Laden von GitHub fehlgeschlagen');
+      }
+    }
+
+    async function githubSave(){
+      const cfg = getGithubConfig();
+      if(!cfg.repo || !cfg.path) { showToast('Repo und Pfad angeben'); return; }
+      try{
+        const content = JSON.stringify(state, null, 2);
+        const b64 = base64EncodeUnicode(content);
+        let sha;
+        try{
+          const existing = await githubGetFile(cfg.repo, cfg.path, cfg.branch, cfg.token);
+          sha = existing.sha;
+        }catch(e){ sha = undefined; }
+        const res = await githubPutFile(cfg.repo, cfg.path, cfg.branch, cfg.token, b64, 'Update physiksammlung (webapp)', sha);
+        saveGithubConfig(!!$('githubRememberToken').checked);
+        showToast('In Repository gespeichert');
+      }catch(err){
+        console.error(err);
+        showToast('Speichern zu GitHub fehlgeschlagen');
+      }
+    }
+
+    $('githubSaveBtn').addEventListener('click', githubSave);
+    $('githubLoadBtn').addEventListener('click', githubLoad);
+
+
     (function init(){
       const today = new Date().toISOString().slice(0,10);
       $('loanFromDate').value = today;
@@ -730,6 +841,18 @@
       const loaded = loadFromLocal();
       if(loaded){
         showToast('Letzte Speicherung geladen');
+      }
+      // load saved GitHub settings into the form and try to load from GitHub if configured
+      const cfgPresent = loadGithubConfigToForm();
+      if(!cfgPresent){
+        // set sensible defaults for the repo you provided
+        $('githubRepo').value = 'winispii/Physik_Inventar';
+        $('githubBranch').value = 'main';
+        $('githubPath').value = 'docs/inventar.json';
+      }
+      if(($('githubRepo').value || '').trim()){
+        // try loading from GitHub (may succeed or fail silently via showToast)
+        githubLoad();
       }
       renderAll();
     })();
