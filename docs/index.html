@@ -161,6 +161,7 @@
           <input id="searchInput" type="search" placeholder="Gerät, Lagerort oder Experiment suchen" />
         </label>
         <button class="btn btn-secondary" id="themeToggle" aria-label="Dark Mode umschalten">◐</button>
+        <button class="btn btn-primary" id="githubSaveHeaderBtn" title="In GitHub speichern">Speichern</button>
         <button class="btn btn-primary" id="quickAddBtn">+ Gerät anlegen</button>
       </div>
     </header>
@@ -294,7 +295,7 @@
               <label class="btn btn-secondary" for="importFile">Inventar importieren</label>
               <input class="sr-only" id="importFile" type="file" accept="application/json" />
             </div>
-            <div class="card" style="padding:1rem;margin-top:.75rem;background:var(--color-surface-2)">
+            <div class="card" id="githubSyncCard" style="padding:1rem;margin-top:.75rem;background:var(--color-surface-2);display:none;">
               <strong>GitHub-Sync</strong>
               <p class="tiny">Speichern und Laden deiner JSON-Datei im GitHub-Repository.</p>
               <div style="display:grid;gap:.5rem;margin-top:.5rem">
@@ -774,8 +775,15 @@
       const headers = { Accept: 'application/vnd.github.v3+json' };
       if(token) headers.Authorization = 'token ' + token;
       const res = await fetch(url, { headers });
-      if(!res.ok) throw new Error('GitHub GET failed: ' + res.status);
-      return res.json();
+      const text = await res.text();
+      let body;
+      try{ body = text ? JSON.parse(text) : null; }catch(e){ body = text; }
+      if(!res.ok){
+        if(res.status === 404) return null;
+        const msg = body && body.message ? body.message : String(body || res.statusText || res.status);
+        throw new Error(`GitHub GET failed: ${res.status} ${res.statusText} — ${msg}`);
+      }
+      return body;
     }
 
     async function githubPutFile(repo, path, branch, token, contentBase64, message, sha){
@@ -785,16 +793,28 @@
       const headers = { Accept: 'application/vnd.github.v3+json', 'Content-Type':'application/json' };
       if(token) headers.Authorization = 'token ' + token;
       const res = await fetch(url, { method: 'PUT', headers, body: JSON.stringify(body) });
-      if(!res.ok) throw new Error('GitHub PUT failed: ' + res.status);
-      return res.json();
+      const text = await res.text();
+      let resp;
+      try{ resp = text ? JSON.parse(text) : null; }catch(e){ resp = text; }
+      if(!res.ok){
+        const msg = resp && resp.message ? resp.message : String(resp || res.statusText || res.status);
+        throw new Error(`GitHub PUT failed: ${res.status} ${res.statusText} — ${msg}`);
+      }
+      return resp;
     }
 
     async function githubLoad(){
       const cfg = getGithubConfig();
       if(!cfg.repo || !cfg.path) { showToast('Repo und Pfad angeben'); return; }
+      // if no token in the form, ask for a one-time token (not saved) so hidden fields aren't blocking usage
+      if(!cfg.token){
+        const one = prompt('GitHub Personal Access Token (PAT) eingeben — wird nur für diesen Vorgang verwendet.\nFür öffentliche Repos ist kein Token nötig, für Schreibzugriff ist ein PAT erforderlich.');
+        if(one) cfg.token = one.trim();
+      }
       try{
         const file = await githubGetFile(cfg.repo, cfg.path, cfg.branch, cfg.token);
-        const text = atob(file.content.replace(/\n/g,''));
+        if(!file){ showToast('Datei nicht gefunden (404)'); return; }
+        const text = atob(String(file.content || '').replace(/\n/g,''));
         const data = JSON.parse(text);
         if(!Array.isArray(data.items) || !Array.isArray(data.loans)) throw new Error('Ungültiges Format');
         state = data;
@@ -804,32 +824,39 @@
         showToast('Von GitHub geladen');
       }catch(err){
         console.error(err);
-        showToast('Laden von GitHub fehlgeschlagen');
+        showToast('Laden von GitHub fehlgeschlagen: ' + (err.message || err));
       }
     }
 
     async function githubSave(){
       const cfg = getGithubConfig();
       if(!cfg.repo || !cfg.path) { showToast('Repo und Pfad angeben'); return; }
+      // if no token in the form, prompt for one-time PAT so users can keep inputs hidden
+      if(!cfg.token){
+        const one = prompt('GitHub Personal Access Token (PAT) eingeben — wird nur für diesen Vorgang verwendet.\nDer PAT braucht Schreibrechte (repo oder public_repo).');
+        if(one) cfg.token = one.trim(); else { showToast('Speichern abgebrochen (kein Token)'); return; }
+      }
       try{
         const content = JSON.stringify(state, null, 2);
         const b64 = base64EncodeUnicode(content);
         let sha;
         try{
           const existing = await githubGetFile(cfg.repo, cfg.path, cfg.branch, cfg.token);
-          sha = existing.sha;
+          sha = existing?.sha;
         }catch(e){ sha = undefined; }
         const res = await githubPutFile(cfg.repo, cfg.path, cfg.branch, cfg.token, b64, 'Update physiksammlung (webapp)', sha);
         saveGithubConfig(!!$('githubRememberToken').checked);
         showToast('In Repository gespeichert');
       }catch(err){
         console.error(err);
-        showToast('Speichern zu GitHub fehlgeschlagen');
+        showToast('Speichern zu GitHub fehlgeschlagen: ' + (err.message || err));
       }
     }
 
     $('githubSaveBtn').addEventListener('click', githubSave);
     $('githubLoadBtn').addEventListener('click', githubLoad);
+    // header save button
+    $('githubSaveHeaderBtn')?.addEventListener('click', githubSave);
 
 
     (function init(){
