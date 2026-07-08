@@ -1,0 +1,18 @@
+{
+  "items": [
+    {
+      "id": "c6160886-516a-4c1a-9316-8b83d90bb2e7",
+      "name": "Lineal",
+      "location": "H1 L",
+      "quantity": 25,
+      "notes": "",
+      "experiments": [
+        "Fadenpendel"
+      ],
+      "photos": [],
+      "createdAt": "2026-07-08T11:23:25.910Z"
+    }
+  ],
+  "loans": [],
+  "updatedAt": "2026-07-08T11:24:10.954Z"
+}
