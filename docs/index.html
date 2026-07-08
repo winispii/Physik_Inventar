@@ -160,8 +160,8 @@
           <span aria-hidden="true">🔎</span>
           <input id="searchInput" type="search" placeholder="Gerät, Lagerort oder Experiment suchen" />
         </label>
+        <button class="btn btn-secondary" id="searchBtn" type="button" aria-label="Inventar durchsuchen">Suchen</button>
         <button class="btn btn-secondary" id="themeToggle" aria-label="Dark Mode umschalten">◐</button>
-        <button class="btn btn-primary" id="githubSaveHeaderBtn" title="In GitHub speichern">Speichern</button>
         <button class="btn btn-primary" id="quickAddBtn">+ Gerät anlegen</button>
       </div>
     </header>
@@ -170,14 +170,9 @@
       <section class="panel active" id="dashboard">
         <div class="hero">
           <div class="card">
-            <h2>Gemeinsame Inventarverwaltung</h2>
-            <p class="muted">Diese App verwaltet Geräte mit Lagerort, Bezeichnung, Anzahl, Fotos, Experimentideen und Ausleihstatus. Für die Zusammenarbeit exportierst du die Daten als JSON-Datei und deine Kolleginnen und Kollegen importieren dieselbe Datei wieder in ihre Ansicht.</p>
-          </div>
-          <div class="card">
             <h2>Dateistand</h2>
             <p class="tiny">Zuletzt geändert</p>
             <div class="kpi-value" id="lastSaved">—</div>
-            <p class="muted tiny">Lokale Arbeit im Browser, teilbar per Import/Export.</p>
           </div>
         </div>
         <div class="kpis">
@@ -288,7 +283,6 @@
           <div class="card grid">
             <div>
               <h2>Daten teilen</h2>
-              <p class="muted">Die App ist statisch und benötigt keinen Server. Damit Kolleginnen und Kollegen mit denselben Daten arbeiten, exportiert ihr die Sammlung als JSON-Datei und importiert jeweils die aktuelle Version wieder.</p>
             </div>
             <div class="filters">
               <button class="btn btn-primary" id="exportBtn">Inventar exportieren</button>
@@ -302,22 +296,13 @@
                 <input id="githubRepo" placeholder="owner/repo (z. B. me/physik)" />
                 <input id="githubBranch" placeholder="Branch (z. B. main)" />
                 <input id="githubPath" placeholder="Dateipfad (z. B. data/inventar.json)" />
-                <input id="githubToken" placeholder="Personal Access Token (PAT) – optional" type="password" />
+                <input id="githubToken" placeholder="Token-Name (z. B. inventar) oder PAT-Wert" type="password" />
                 <label style="font-size:var(--text-xs)"><input type="checkbox" id="githubRememberToken" /> Token speichern</label>
                 <div style="display:flex;gap:.5rem">
                   <button class="btn btn-primary" id="githubSaveBtn">Speichern (GitHub)</button>
                   <button class="btn btn-secondary" id="githubLoadBtn">Laden (GitHub)</button>
                 </div>
               </div>
-            </div>
-            <div class="card" style="padding:1rem;background:var(--color-surface-2)">
-              <strong>Empfohlener Ablauf im Kollegium</strong>
-              <ul style="margin-top:.75rem;padding-left:1rem;display:grid;gap:.45rem;">
-                <li>Eine Person pflegt die aktuelle Datei.</li>
-                <li>Nach Änderungen wird die JSON-Datei exportiert.</li>
-                <li>Die Datei kann im Schulcloud-Ordner oder auf dem Netzlaufwerk abgelegt werden.</li>
-                <li>Kolleginnen und Kollegen importieren diese Datei vor der Bearbeitung.</li>
-              </ul>
             </div>
           </div>
           <div class="card grid">
@@ -326,10 +311,6 @@
               <p class="muted">Zusätzlich kannst du eine tabellarische Übersicht als CSV herunterladen.</p>
             </div>
             <button class="btn btn-secondary" id="csvBtn">CSV exportieren</button>
-            <div class="card" style="padding:1rem;background:var(--color-surface-2)">
-              <strong>Hinweis zu echter Live-Kollaboration</strong>
-              <p class="muted" style="margin-top:.5rem">Für gleichzeitiges Bearbeiten bräuchte die App später ein Backend, z. B. Supabase, Firebase oder einen Schulserver mit Datenbank. Diese Version ist bewusst offline-fähig und sofort einsetzbar.</p>
-            </div>
           </div>
         </div>
       </section>
@@ -421,6 +402,38 @@
       });
     }
 
+    function experimentMatches(term){
+      if(!term) return false;
+      const lower = term.toLowerCase();
+      return state.items.some(item => (item.experiments || []).some(exp => exp.toLowerCase().includes(lower)));
+    }
+
+    function filteredExperiments(){
+      const term = searchTerm.trim().toLowerCase();
+      const expMap = new Map();
+      state.items.forEach(item => {
+        (item.experiments || []).forEach(exp => {
+          const label = exp.trim();
+          if(!label) return;
+          const key = label.toLowerCase();
+          const hay = [label, item.name, item.location, item.notes].join(' ').toLowerCase();
+          if(term && !hay.includes(term) && !key.includes(term)) return;
+          if(!expMap.has(key)) expMap.set(key, { label, items: new Set() });
+          expMap.get(key).items.add(item.name);
+        });
+      });
+      return [...expMap.values()].map(exp => ({ label: exp.label, items: [...exp.items].sort((a,b)=>a.localeCompare(b,'de')) })).sort((a,b)=>a.label.localeCompare(b.label,'de'));
+    }
+
+    function updateSearchPanel(){
+      const term = searchTerm.trim();
+      if(!term) return;
+      const shouldKeepFocus = document.activeElement === $('searchInput');
+      if(experimentMatches(term)) setPanel('experimente');
+      else setPanel('inventar');
+      if(shouldKeepFocus) $('searchInput').focus();
+    }
+
     function renderKPIs(){
       $('kpiItems').textContent = state.items.length;
       $('kpiUnits').textContent = state.items.reduce((sum,item)=>sum + Number(item.quantity || 0),0);
@@ -495,18 +508,9 @@
 
     function renderExperiments(){
       const target = $('experimentList');
-      const expMap = new Map();
-      state.items.forEach(item => {
-        (item.experiments || []).forEach(exp => {
-          const key = exp.trim().toLowerCase();
-          if(!key) return;
-          if(!expMap.has(key)) expMap.set(key, { label: exp.trim(), items: [] });
-          expMap.get(key).items.push(item.name);
-        });
-      });
-      const experiments = [...expMap.values()].sort((a,b)=>a.label.localeCompare(b.label,'de'));
+      const experiments = filteredExperiments();
       if(!experiments.length){ target.innerHTML = '<div class="empty">Noch keine Experimente hinterlegt.</div>'; return; }
-      target.innerHTML = experiments.map(exp => `<details class="item"><summary><strong>${escapeHtml(exp.label)}</strong> <span class="tiny">(${exp.items.length} Geräte)</span></summary><div class="tiny" style="margin-top:.6rem">${escapeHtml([...new Set(exp.items)].join(', '))}</div></details>`).join('');
+      target.innerHTML = experiments.map(exp => `<details class="item"><summary><strong>${escapeHtml(exp.label)}</strong> <span class="tiny">(${exp.items.length} Geräte)</span></summary><div class="tiny" style="margin-top:.6rem">${escapeHtml(exp.items.join(', '))}</div></details>`).join('');
     }
 
     function renderLoans(){
@@ -679,7 +683,8 @@
     $('expandAllExperiments')?.addEventListener('click', () => document.querySelectorAll('#experimentList details').forEach(d => d.open = true));
     $('collapseAllExperiments')?.addEventListener('click', () => document.querySelectorAll('#experimentList details').forEach(d => d.open = false));
     $('quickAddBtn').addEventListener('click', () => setPanel('inventar'));
-    $('searchInput').addEventListener('input', (e) => { searchTerm = e.target.value; renderInventory(); });
+    $('searchInput').addEventListener('input', (e) => { searchTerm = e.target.value; updateSearchPanel(); renderInventory(); renderExperiments(); });
+    $('searchBtn').addEventListener('click', () => { updateSearchPanel(); renderInventory(); renderExperiments(); });
     $('locationFilter').addEventListener('change', (e) => { locationFilter = e.target.value; renderInventory(); });
     $('availabilityFilter').addEventListener('change', (e) => { availabilityFilter = e.target.value; renderInventory(); });
 
@@ -770,10 +775,38 @@
       }catch(e){ return false; }
     }
 
+    function getGithubAuthHeader(token){
+      if(!token) return null;
+      return /^ghp_|^github_pat_/.test(token) ? 'Bearer ' + token : 'token ' + token;
+    }
+
+    function isLikelyGithubPat(token){
+      return typeof token === 'string' && /^(?:ghp_|github_pat_)?[A-Za-z0-9_]{20,}$/.test(token);
+    }
+
+    function resolveGithubToken(tokenInput){
+      if(!tokenInput) return null;
+      if(isLikelyGithubPat(tokenInput)) return tokenInput;
+      const aliasKey = `github_token_alias_${tokenInput}`;
+      const stored = localStorage.getItem(aliasKey);
+      if(stored) return stored;
+      const pat = prompt(`Alias "${tokenInput}" erkannt. Bitte den echten GitHub-PAT für diesen Alias eingeben:`);
+      if(!pat) {
+        throw new Error(`Kein PAT für Alias "${tokenInput}" eingegeben.`);
+      }
+      const trimmed = pat.trim();
+      if(!isLikelyGithubPat(trimmed)){
+        throw new Error('Ungültiger PAT. Bitte echten GitHub-PAT eingeben.');
+      }
+      localStorage.setItem(aliasKey, trimmed);
+      return trimmed;
+    }
+
     async function githubGetFile(repo, path, branch, token){
       const url = `https://api.github.com/repos/${repo}/contents/${encodeURI(path)}?ref=${encodeURIComponent(branch)}`;
       const headers = { Accept: 'application/vnd.github.v3+json' };
-      if(token) headers.Authorization = 'token ' + token;
+      const auth = getGithubAuthHeader(token);
+      if(auth) headers.Authorization = auth;
       const res = await fetch(url, { headers });
       const text = await res.text();
       let body;
@@ -791,7 +824,8 @@
       const body = { message, content: contentBase64, branch };
       if(sha) body.sha = sha;
       const headers = { Accept: 'application/vnd.github.v3+json', 'Content-Type':'application/json' };
-      if(token) headers.Authorization = 'token ' + token;
+      const auth = getGithubAuthHeader(token);
+      if(auth) headers.Authorization = auth;
       const res = await fetch(url, { method: 'PUT', headers, body: JSON.stringify(body) });
       const text = await res.text();
       let resp;
@@ -812,7 +846,8 @@
         if(one) cfg.token = one.trim();
       }
       try{
-        const file = await githubGetFile(cfg.repo, cfg.path, cfg.branch, cfg.token);
+        const token = cfg.token ? resolveGithubToken(cfg.token) : null;
+        const file = await githubGetFile(cfg.repo, cfg.path, cfg.branch, token);
         if(!file){ showToast('Datei nicht gefunden (404)'); return; }
         const text = atob(String(file.content || '').replace(/\n/g,''));
         const data = JSON.parse(text);
@@ -837,14 +872,15 @@
         if(one) cfg.token = one.trim(); else { showToast('Speichern abgebrochen (kein Token)'); return; }
       }
       try{
+        const token = resolveGithubToken(cfg.token);
         const content = JSON.stringify(state, null, 2);
         const b64 = base64EncodeUnicode(content);
         let sha;
         try{
-          const existing = await githubGetFile(cfg.repo, cfg.path, cfg.branch, cfg.token);
+          const existing = await githubGetFile(cfg.repo, cfg.path, cfg.branch, token);
           sha = existing?.sha;
         }catch(e){ sha = undefined; }
-        const res = await githubPutFile(cfg.repo, cfg.path, cfg.branch, cfg.token, b64, 'Update physiksammlung (webapp)', sha);
+        const res = await githubPutFile(cfg.repo, cfg.path, cfg.branch, token, b64, 'Update physiksammlung (webapp)', sha);
         saveGithubConfig(!!$('githubRememberToken').checked);
         showToast('In Repository gespeichert');
       }catch(err){
@@ -855,8 +891,6 @@
 
     $('githubSaveBtn').addEventListener('click', githubSave);
     $('githubLoadBtn').addEventListener('click', githubLoad);
-    // header save button
-    $('githubSaveHeaderBtn')?.addEventListener('click', githubSave);
 
 
     (function init(){
@@ -877,8 +911,8 @@
         $('githubBranch').value = 'main';
         $('githubPath').value = 'docs/inventar.json';
       }
-      if(($('githubRepo').value || '').trim()){
-        // try loading from GitHub (may succeed or fail silently via showToast)
+      if((($('githubRepo').value || '').trim()) && $('githubToken').value){
+        // only auto-load from GitHub if a token is present, so the page doesn't prompt on startup
         githubLoad();
       }
       renderAll();
